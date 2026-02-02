@@ -1,0 +1,31 @@
+routes:
+  - name: support_summary
+    match:
+      use_case: support_summary
+    primary:
+      provider: openai
+      model: gpt-4o-mini
+    fallbacks:
+      - provider: anthropic
+        model: claude-3-5-sonnet
+    timeout_ms: 10000
+    retries: 1
+  - name: code_review
+    match:
+      use_case: code_review
+    primary:
+      provider: anthropic
+      model: claude-3-5-sonnet
+    fallbacks:
+      - provider: openai
+        model: gpt-4o
+    timeout_ms: 30000
+    retries: 2
+  - name: default
+    match:
+      use_case: default
+    primary:
+      provider: openai
+      model: gpt-4o-mini
+    timeout_ms: 15000
+    retries: 1
