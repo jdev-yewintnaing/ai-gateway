@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/google/uuid" // Placeholder if needed
+	"github.com/yewintnaing/ai-gateway/internal/cache"
 	"github.com/yewintnaing/ai-gateway/internal/config"
+	"github.com/yewintnaing/ai-gateway/internal/governance"
 	"github.com/yewintnaing/ai-gateway/internal/providers"
 	"github.com/yewintnaing/ai-gateway/internal/ratelimit"
 	"github.com/yewintnaing/ai-gateway/internal/router"
@@ -23,15 +25,19 @@ type Handler struct {
 	registry providers.Registry
 	usage    *usage.Store
 	limiter  *ratelimit.Limiter
+	cache    *cache.Cache
+	detector *governance.Detector
 	tracer   trace.Tracer
 }
 
-func NewHandler(r *router.Router, reg providers.Registry, s *usage.Store, l *ratelimit.Limiter) *Handler {
+func NewHandler(r *router.Router, reg providers.Registry, s *usage.Store, l *ratelimit.Limiter, c *cache.Cache, d *governance.Detector) *Handler {
 	return &Handler{
 		router:   r,
 		registry: reg,
 		usage:    s,
 		limiter:  l,
+		cache:    c,
+		detector: d,
 		tracer:   otel.Tracer("gateway-handler"),
 	}
 }
@@ -90,6 +96,24 @@ func (h *Handler) HandleChat(w http.ResponseWriter, r *http.Request) {
 	route := h.router.Route(useCase)
 	span.SetAttributes(attribute.String("route_name", route.Name))
 
+	// Cache Check (only for non-streaming)
+	var cacheKey string
+	if !req.Stream && h.cache != nil {
+		var err error
+		cacheKey, err = cache.GenerateKey(route.Primary.Model, req.Messages)
+		if err == nil {
+			var cachedResp providers.ChatResponse
+			found, _ := h.cache.Get(ctx, cacheKey, &cachedResp)
+			if found {
+				span.SetAttributes(attribute.Bool("cache_hit", true))
+				w.Header().Set("x-request-id", requestID)
+				w.Header().Set("x-gw-cache", "HIT")
+				json.NewEncoder(w).Encode(cachedResp)
+				return
+			}
+		}
+	}
+
 	// Ensure request row exists for attempts
 	h.usage.Log(ctx, usage.Record{
 		RequestID: requestID,
@@ -127,6 +151,23 @@ func (h *Handler) HandleChat(w http.ResponseWriter, r *http.Request) {
 				Stream:      req.Stream,
 			}
 
+			// PII Masking
+			var unmaskMap map[string]string
+			if h.detector != nil {
+				for i, msg := range provReq.Messages {
+					masked, m := h.detector.Mask(msg.Content)
+					provReq.Messages[i].Content = masked
+					// Merge unmask maps (simplification: assume no token collisions across messages)
+					if unmaskMap == nil {
+						unmaskMap = m
+					} else {
+						for k, v := range m {
+							unmaskMap[k] = v
+						}
+					}
+				}
+			}
+
 			attemptStart := time.Now()
 
 			if req.Stream {
@@ -156,10 +197,24 @@ func (h *Handler) HandleChat(w http.ResponseWriter, r *http.Request) {
 					LatencyMS: int(time.Since(start).Milliseconds()), StatusCode: http.StatusOK,
 				})
 
+				// Store in cache if applicable
+				if cacheKey != "" && h.cache != nil {
+					h.cache.Set(ctx, cacheKey, resp)
+				}
+
 				w.Header().Set("x-request-id", requestID)
 				w.Header().Set("x-gw-route", route.Name)
 				w.Header().Set("x-gw-provider", target.Provider)
 				w.Header().Set("x-gw-model", target.Model)
+				w.Header().Set("x-gw-cache", "MISS")
+
+				// Unmask response if needed
+				if unmaskMap != nil && h.detector != nil {
+					for i, choice := range resp.Choices {
+						resp.Choices[i].Message.Content = h.detector.Unmask(choice.Message.Content, unmaskMap)
+					}
+				}
+
 				json.NewEncoder(w).Encode(resp)
 				tSpan.End()
 				return

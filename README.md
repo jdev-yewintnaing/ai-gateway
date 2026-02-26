@@ -6,6 +6,9 @@ Production-grade AI Gateway in Go with streaming, fallback routing, rate limitin
 - **Streaming**: Support for Server-Sent Events (SSE).
 - **Fallback Routing**: Automatic fallback to secondary models if primary fails.
 - **Retries**: Configurable retries for primary and fallback targets.
+- **Semantic Caching**: Redis-based exact-match caching to reduce latency and costs.
+- **Governance (PII Masking)**: Automatic detection and masking of sensitive data (Emails, SSNs, CCs, IPs) before they leave the network.
+- **Dynamic Cost Management**: Database-backed model pricing with in-memory caching for accurate cost estimation.
 - **Rate Limiting**: Redis-based token-per-minute limiting per tenant.
 - **Observability**: OpenTelemetry tracing and metrics.
 
@@ -14,9 +17,9 @@ Production-grade AI Gateway in Go with streaming, fallback routing, rate limitin
 - **Anthropic**: ✅ Fully implemented (including streaming)
 
 ## Pending Features
-- **Governed**: Advanced policy enforcement and security auditing.
 - **Extensible**: Plugin system for custom providers and middleware.
 - **Multi-tenant Production-ready**: Enhanced isolation, billing integration, and high-availability deployment patterns.
+- **Google Gemini**: Support for Google's Gemini models.
 
 ## Setup & Running
 
@@ -90,3 +93,4 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
 ## Database Schema
 - `requests`: Final status of each request.
 - `provider_attempts`: Detailed log of every primary, retry, and fallback attempt.
+- `model_pricing`: Dynamic pricing data for cost estimation.

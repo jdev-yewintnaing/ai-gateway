@@ -12,7 +12,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/yewintnaing/ai-gateway/internal/api"
+	"github.com/yewintnaing/ai-gateway/internal/cache"
 	"github.com/yewintnaing/ai-gateway/internal/config"
+	"github.com/yewintnaing/ai-gateway/internal/governance"
 	"github.com/yewintnaing/ai-gateway/internal/observability"
 	"github.com/yewintnaing/ai-gateway/internal/providers"
 	"github.com/yewintnaing/ai-gateway/internal/providers/anthropic"
@@ -56,12 +58,23 @@ func main() {
 	if err := store.Migrate(ctx, "migrations/003_add_unique_to_requests.sql"); err != nil {
 		log.Printf("Warning: Migration 003 failed: %v", err)
 	}
+	if err := store.Migrate(ctx, "migrations/004_create_model_pricing.sql"); err != nil {
+		log.Printf("Warning: Migration 004 failed: %v", err)
+	}
 
-	// 5. Initialize Rate Limiter
 	limiter, err := ratelimit.NewLimiter(cfg.RedisURL, cfg.TPM)
 	if err != nil {
 		log.Printf("Warning: Redis not available, rate limiting disabled: %v", err)
 	}
+
+	// 6. Initialize Cache
+	c, err := cache.NewCache(cfg.RedisURL, 1*time.Hour)
+	if err != nil {
+		log.Printf("Warning: Redis not available, caching disabled: %v", err)
+	}
+
+	// 7. Initialize Governance
+	detector := governance.NewDetector()
 
 	// 6. Initialize Providers
 	registry := providers.Registry{
@@ -69,9 +82,9 @@ func main() {
 		"anthropic": anthropic.NewProvider(cfg.AnthropicKey, cfg.AnthropicURL, cfg.AnthropicVersion),
 	}
 
-	// 7. Initialize Components
+	// 8. Initialize Components
 	rt := router.NewRouter(cfg.Routes)
-	h := api.NewHandler(rt, registry, store, limiter)
+	h := api.NewHandler(rt, registry, store, limiter, c, detector)
 
 	// 8. Setup Router
 	r := chi.NewRouter()
